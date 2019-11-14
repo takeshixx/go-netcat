@@ -2,9 +2,11 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -139,10 +141,19 @@ func main() {
 	var isUdp bool
 	var isListen bool
 	var host string
+	var proxy string
+	var beSilent bool
+	var sslProxy bool
 	flag.StringVar(&sourcePort, "p", "", "Specifies the source port netcat should use, subject to privilege restrictions and availability.")
+	flag.StringVar(&proxy, "proxy", "", "Specify the HTTP proxy host and port, e. g.: 127.0.0.1:8080")
 	flag.BoolVar(&isUdp, "u", false, "Use UDP instead of the default option of TCP.")
 	flag.BoolVar(&isListen, "l", false, "Used to specify that netcat should listen for an incoming connection rather than initiate a connection to a remote host.")
+	flag.BoolVar(&beSilent, "s", false, "Silent mode")
+	flag.BoolVar(&sslProxy, "ssl", false, "Create SSL Tunnel")
 	flag.Parse()
+	if beSilent {
+		log.SetOutput(ioutil.Discard)
+	}
 	if flag.NFlag() == 0 && flag.NArg() == 0 {
 		fmt.Println("go-nc [-lu] [-p source port ] [-s source ip address ] [hostname ] [port[s]]")
 		flag.Usage()
@@ -150,10 +161,11 @@ func main() {
 	}
 	log.Println("Source port:", sourcePort)
 	if flag.Lookup("u") != nil {
-		log.Println("Protocol:", "udp")
-		isUdp = true
-	} else {
-		log.Println("Protocol:", "tcp")
+		if isUdp {
+			log.Println("Protocol:", "udp")
+		} else {
+			log.Println("Protocol:", "tcp")
+		}
 	}
 	if sourcePort != "" {
 		if _, err := strconv.Atoi(sourcePort); err != nil {
@@ -205,11 +217,34 @@ func main() {
 			tcp_con_handle(con)
 
 		} else if host != "" {
-			con, err := net.Dial("tcp", host+destinationPort)
-			if err != nil {
-				log.Fatalln(err)
+			var con net.Conn
+			var err error
+			if proxy != "" {
+				con, err = net.Dial("tcp", proxy)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				log.Println("Connected to proxy ", proxy)
+				connectStr := fmt.Sprintf("CONNECT %s:%d HTTP/1.0\r\n\r\n", host, destinationPort)
+				fmt.Fprintf(con, connectStr)
+				log.Println("Sent CONNECT string")
+			} else if sslProxy {
+				conf := &tls.Config{
+					InsecureSkipVerify: true,
+				}
+				con, err = tls.Dial("tcp", host+destinationPort, conf)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				log.Println("Connected to", host+destinationPort)
+			} else {
+				// Direct connection
+				con, err = net.Dial("tcp", host+destinationPort)
+				if err != nil {
+					log.Fatalln(err)
+				}
+				log.Println("Connected to", host+destinationPort)
 			}
-			log.Println("Connected to", host+destinationPort)
 			tcp_con_handle(con)
 		} else {
 			flag.Usage()
